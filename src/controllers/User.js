@@ -1,5 +1,7 @@
 const { list, insert, findOne, modify } = require('../services/User');
+const UserService = require('../services/UserService');
 const eventEmitter = require('../scripts/events/eventEmitter');
+const ApiError = require("../errors/ApiError");
 
 const httpStatus = require('http-status');
 const uuid = require('uuid');
@@ -10,83 +12,72 @@ const {
   generateJWTRefreshToken,
 } = require('../scripts/utils/helper');
 
-const index = (req, res) => {
-  list()
-    .then((response) => {
-      if (!response)
-        res
-          .status(httpStatus.INTERNAL_SERVER_ERROR)
-          .send({ error: 'Something went wrong !' });
-      res.status(httpStatus.OK).send(response);
-    })
-    .catch((e) => {
-      res.status(httpStatus.INTERNAL_SERVER_ERROR).send(e);
-    });
-};
-
-const create = (req, res) => {
-  req.body.password = passwordToHash(req.body.password);
-  insert(req.body)
-    .then((response) => {
-      if (!response)
-        res
-          .status(httpStatus.INTERNAL_SERVER_ERROR)
-          .send({ error: 'Something went wrong !' });
-      res.status(httpStatus.CREATED).send(response);
-    })
-    .catch((e) => {
-      res.status(httpStatus.INTERNAL_SERVER_ERROR).send(e);
-    });
-};
-
-const login = (req, res) => {
-  req.body.password = passwordToHash(req.body.password);
-  findOne(req.body)
-    .then((user) => {
-      if (!user)
-        return res
-          .status(httpStatus.NOT_FOUND)
-          .send({ message: 'User not found' });
-      user = {
-        ...user.toObject(),
-        tokens: {
-          access_token: generateJWTAccessToken(user),
-          refresh_token: generateJWTRefreshToken(user),
-        },
-      };
-      delete user.password;
-      res.status(httpStatus.OK).send(user);
-    })
-    .catch((e) => res.status(httpStatus.INTERNAL_SERVER_ERROR).send(e));
-};
-
-const resetPassword = (req, res) => {
-  const new_password =
-    uuid.v4()?.split('-')[0] || `usr-${new Date().getTime()}`;
-
-  modify({ email: req.body.email }, { password: passwordToHash(new_password) })
-    .then((updatedUser) => {
-      if (!updatedUser)
-        return res.status(httpStatus.NOT_FOUND).send({ error: 'No such user' });
-      eventEmitter.emit('send_email', {
-        to: updatedUser.email,
-        subject: 'Reset Password',
-        html: `User password has been changed. <br />Your new password -> ${new_password}`,
+class UserController {
+  index(req, res) {
+    UserService.list()
+      .then((response) => {
+        if (!response) return next(new ApiError('Problem occured'));
+        res.status(httpStatus.OK).send(response);
+      })
+      .catch((e) => {
+        res.status(httpStatus.INTERNAL_SERVER_ERROR).send(e);
       });
-      res
-        .status(httpStatus.OK)
-        .send({ message: 'Required information is sent your e-mail' });
-    })
-    .catch(() =>
-      res
-        .status(httpStatus.INTERNAL_SERVER_ERROR)
-        .send({ error: "Something went wrong while resetting password'" })
-    );
-};
+  }
+  create(req, res) {
+    req.body.password = passwordToHash(req.body.password);
+    UserService.create(req.body)
+      .then((response) => {
+        if (!response) return next(new ApiError('Something went wrong'));
+        res.status(httpStatus.CREATED).send(response);
+      })
+      .catch((e) => {
+        res.status(httpStatus.INTERNAL_SERVER_ERROR).send(e);
+      });
+  }
+  login(req, res) {
+    req.body.password = passwordToHash(req.body.password);
+    UserService.findOne(req.body)
+      .then((user) => {
+        if (!user)
+          return next(new ApiError('User not found', httpStatus.NOT_FOUND));
+        user = {
+          ...user.toObject(),
+          tokens: {
+            access_token: generateJWTAccessToken(user),
+            refresh_token: generateJWTRefreshToken(user),
+          },
+        };
+        delete user.password;
+        res.status(httpStatus.OK).send(user);
+      })
+      .catch((e) => res.status(httpStatus.INTERNAL_SERVER_ERROR).send(e));
+  }
+  resetPassword(req, res) {
+    const new_password =
+      uuid.v4()?.split('-')[0] || `usr-${new Date().getTime()}`;
 
-module.exports = {
-  index,
-  create,
-  login,
-  resetPassword,
-};
+    UserService.updateWhere(
+      { email: req.body.email },
+      { password: passwordToHash(new_password) }
+    )
+      .then((updatedUser) => {
+        if (!updatedUser)
+          return next(new ApiError('No such user', httpStatus.NOT_FOUND));
+        eventEmitter.emit('send_email', {
+          to: updatedUser.email,
+          subject: 'Reset Password',
+          html: `User password has been changed. <br />Your new password -> ${new_password}`,
+        });
+        res
+          .status(httpStatus.OK)
+          .send({ message: 'Required information is sent your e-mail' });
+      })
+      .catch(() =>
+        res
+          .status(httpStatus.INTERNAL_SERVER_ERROR)
+          .send({ error: "Something went wrong while resetting password'" })
+      );
+  }
+}
+
+module.exports = new UserController();
